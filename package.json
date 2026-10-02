@@ -1,0 +1,30 @@
+{
+  "name": "my-harness",
+  "version": "1.0.0",
+  "description": "A coding harness from scratch.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx --env-file=.env src/index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GREENRAT-K405/my-harness.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/GREENRAT-K405/my-harness/issues"
+  },
+  "homepage": "https://github.com/GREENRAT-K405/my-harness#readme",
+  "dependencies": {
+    "openai": "^7.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
