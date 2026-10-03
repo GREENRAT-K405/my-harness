@@ -3,10 +3,12 @@ export type StopReason = "stop" | "length" | "toolUse";
 
 
 export type TextBlock = {type:"text", text:string};
-export type ToolCallBlock = {type:"toolCall", id:string, name:string, arguments:Record<string, unknown>};
+// signature: opaque provider data that must be sent back with the call (Gemini thought signatures)
+export type ToolCallBlock = {type:"toolCall", id:string, name:string, arguments:Record<string, unknown>, signature?:string};
 export type ContentBlock = TextBlock|ToolCallBlock;
 
 export type UserMessage = { role: "user"; content: string };
+
 export type AssistantMessage = {
   role: "assistant";
   content:ContentBlock[],
@@ -15,11 +17,11 @@ export type AssistantMessage = {
 };
 
 export type ToolResultMessage = {role:"toolResult",toolCallId:string, toolName:string, content:string, isError:boolean}
+export type ToolSpec = {name:string, description:string, parameters:Record<string,unknown>}
+export type Tool = ToolSpec & {execute(args:Record<string,unknown>):Promise<string>}
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 
-export type ToolSpec = {name:string, description:string, parameters:Record<string,unknown>}
-export type Tool = ToolSpec & {execute(args:Record<string,unknown>):Promise<string>}
 
 export type StreamEvent =
   | { type: "text_delta"; delta: string }
