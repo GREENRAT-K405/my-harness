@@ -24,36 +24,74 @@ import { createInterface } from "node:readline/promises";
 const SYSTEM_PROMPT = `You are a coding agent working in ${process.cwd()}.
 Use the bash tool to explore and edit files. Keep answers short.`;
 
-// chatcompletionmessageparam is just a typescript type for messages
+// The whole conversation. The model only knows what's in here.
 const messages: ChatCompletionMessageParam[] = [{ role: "system", content: SYSTEM_PROMPT }];
 
+type ToolCall={id: string; name: string; args: string};
+
+// Calls the model, prints text as it streams in, and returns the full text + tool calls.
+async function callModel(){
+    const stream=await client.chat.completions.create({
+        model:MODEL,
+        messages: messages,
+        tools: TOOLS,
+        stream: true,
+    });
+
+    let text ="";
+    const calls: ToolCall[]=[];
+
+    // printing text/message
+    for await (const chunk of stream){
+        const delta = chunk.choices[0]?.delta;
+        if(!delta) continue;
+
+        if(delta.content){
+            process.stdout.write(delta.content);
+            text+=delta.content;
+        }
+    
 
 
-async function agentTurn(): Promise<void> {
+    // tool calls arrive in pieces. 'index' says which call a piece belongs to.
+    for(const piece of delta.tool_calls ?? []){
+        calls[piece.index] ??= {id: "", name: "", args: ""};
+        const call = calls[piece.index];
+        if(piece.id)    call.id=piece.id;
+        if(piece.function?.name) call.name=piece.function.name;
+        if(piece.function?.arguments)    call.args += piece.function.arguments;
+        }
+    }
+    if(text)    process.stdout.write("\n");
+    return { text, calls };
+}
+
+
+async function agentTurn(){
   while (true) {
-    const res = await client.chat.completions.create({ model: MODEL, messages, tools: TOOLS });
-    const msg = res.choices[0].message;
 
-    messages.push({ role: "assistant", content: msg.content, tool_calls: msg.tool_calls });
-    if (msg.content) console.log(`\n${msg.content}`);
+    const { text, calls } = await callModel();
 
-    if (!msg.tool_calls?.length) return;
+    messages.push({
+        role: "assistant",
+        content: text || null,
+        tool_calls : calls.length ? calls.map((c) => ({ id: c.id, type: "function", function:{
+            name: c.name, arguments:c.args
+        }})) : undefined,
+    });
 
-    for (const call of msg.tool_calls) {
-      // every tool_call_id needs a matching tool message, or the next request is rejected
-      if (call.type !== "function") {
-        messages.push({ role: "tool", tool_call_id: call.id, content: "Error: unsupported tool call type." });
-        continue;
-      }
-      let args = {};
-      try {
-        args = JSON.parse(call.function.arguments);
-      } catch {
-        messages.push({ role: "tool", tool_call_id: call.id, content: "Error: tool arguments were not valid JSON." });
-        continue;
-      }
-      const output = await runTool(call.function.name, args, process.cwd());
-      messages.push({ role: "tool", tool_call_id: call.id, content: output });
+    if(calls.length === 0) return;
+
+    for(const call of calls){
+        let args = {}
+        try{
+            args=JSON.parse(call.args);
+        }catch{
+            // Bad JSON: leave args empty and runTool will tell the model.
+        }
+
+        const output = await runTool(call.name, args, process.cwd());
+        messages.push({role: "tool", tool_call_id: call.id, content: output});
     }
   }
 }
