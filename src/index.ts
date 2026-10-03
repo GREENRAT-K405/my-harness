@@ -29,6 +29,9 @@ const messages: ChatCompletionMessageParam[] = [{ role: "system", content: SYSTE
 
 type ToolCall={id: string; name: string; args: string};
 
+// cap on output tokens per model call
+const MAX_TOKENS = 1024;
+
 // Calls the model, prints text as it streams in, and returns the full text + tool calls.
 async function callModel(){
     const stream=await client.chat.completions.create({
@@ -36,13 +39,21 @@ async function callModel(){
         messages: messages,
         tools: TOOLS,
         stream: true,
+        max_completion_tokens: MAX_TOKENS,
+        stream_options: { include_usage: true }, // final chunk carries token usage
     });
 
     let text ="";
     const calls: ToolCall[]=[];
+    let stopReason: string | null = null;
+    let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
 
     // printing text/message
     for await (const chunk of stream){
+        // usage comes on the last chunk (Groq also puts it under x_groq)
+        usage = chunk.usage ?? (chunk as any).x_groq?.usage ?? usage;
+        stopReason = chunk.choices[0]?.finish_reason ?? stopReason;
+
         const delta = chunk.choices[0]?.delta;
         if(!delta) continue;
 
@@ -63,6 +74,10 @@ async function callModel(){
         }
     }
     if(text)    process.stdout.write("\n");
+
+    console.log(
+        `[stop: ${stopReason ?? "?"} | in: ${usage?.prompt_tokens ?? "?"} | out: ${usage?.completion_tokens ?? "?"}/${MAX_TOKENS} | total: ${usage?.total_tokens ?? "?"}]`
+    );
     return { text, calls };
 }
 
