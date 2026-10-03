@@ -5,7 +5,8 @@
  * Messages API format, streams the reply, and translates it back.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import type { Provider, StreamOptions, StopReason, Message, ContentBlock } from "../types.ts";
+import type { Provider, StopReason, Message, ContentBlock } from "../types.ts";
+import { parseToolArgs } from "./parse-args.ts";
 
 
 /**
@@ -62,7 +63,6 @@ export function createAnthropic(): Provider {
           input_schema:t.parameters as Anthropic.Tool.InputSchema
         }))
       });
-      let text = "";
       const content:ContentBlock[]=[]; // the assistant message we build up as events arrive
       let json=""; // arguments of the current tool call, collected as raw JSON text
 
@@ -90,15 +90,8 @@ export function createAnthropic(): Provider {
         } else if(event.type==="content_block_stop"){
           // the block is finished, so a tool call's JSON is now complete and safe to parse
           const block=content.at(-1);
-          if(block?.type==="toolCall") block.arguments=json?JSON.parse(json) :{};
+          if(block?.type==="toolCall") block.arguments=parseToolArgs(json);
         }
-        // if (
-        //   event.type === "content_block_delta" &&
-        //   event.delta.type === "text_delta"
-        // ) {
-        //     text+=event.delta.text;
-        //     yield{type:"text_delta", delta:event.delta.text};
-        // }
       }
       // the SDK assembles the full message for us; we only need its stop reason and usage
       const final= await stream.finalMessage();

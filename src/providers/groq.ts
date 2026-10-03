@@ -8,6 +8,7 @@
 import Groq from "groq-sdk";
 import type { ChatCompletionMessageParam } from "groq-sdk/resources/chat/completions";
 import type { ContentBlock, Message, Provider, StopReason, Usage } from "../types.ts";
+import { parseToolArgs } from "./parse-args.ts";
 
 /**
  * Converts our conversation into Groq's (OpenAI-style) format.
@@ -99,7 +100,7 @@ export function createGroq(): Provider {
       // build the final message: text first, then each tool call with its JSON parsed into an object
       const content: ContentBlock[] = text ? [{ type: "text", text }] : [];
       for (const c of calls) {
-        if (c) content.push({ type: "toolCall", id: c.id, name: c.name, arguments: c.args ? JSON.parse(c.args) : {} });
+        if (c) content.push({ type: "toolCall", id: c.id, name: c.name, arguments: parseToolArgs(c.args) });
       }
       // trust the content over finish_reason: if there's a tool call, the model wants it run
       if (content.some((b) => b.type === "toolCall")) stopReason = "toolUse";

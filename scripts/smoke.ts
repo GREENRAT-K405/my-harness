@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runAgent, type AgentEvent } from "../src/agent/loop.ts";
 import { getProvider } from "../src/providers/index.ts";
+import { parseToolArgs } from "../src/providers/parse-args.ts";
 import { tools } from "../src/tools/index.ts";
 import type { AssistantMessage, Message, Provider, StreamEvent, Tool } from "../src/types.ts";
 
@@ -183,6 +184,7 @@ await check("unknown tool -> error result goes back to the model, loop continues
   await runAgent({ provider, model: "m", tools: [echoTool], messages: [{ role: "user", content: "go" }], onEvent() {} });
   const result = provider.seen[1].at(-1);
   expect(result?.role === "toolResult" && result.isError, `expected an error result, got ${JSON.stringify(result)}`);
+  expect(result.content.includes("nope"), `error should name the unknown tool, got: "${result.content}"`);
 });
 
 await check("stops after maxTurns instead of looping forever", async () => {
@@ -195,6 +197,13 @@ await check("stops after maxTurns instead of looping forever", async () => {
     threw = true;
   }
   expect(threw && provider.seen.length === 2, `threw=${threw}, model calls=${provider.seen.length}`);
+});
+
+await check("malformed tool JSON becomes {} instead of crashing", () => {
+  expect(JSON.stringify(parseToolArgs('{"path": "a.ts"}')) === '{"path":"a.ts"}', "valid JSON wasn't parsed");
+  for (const bad of ['{"path": "a.t', "", "null", "[1,2]", "42"]) {
+    expect(JSON.stringify(parseToolArgs(bad)) === "{}", `parseToolArgs(${JSON.stringify(bad)}) should be {}`);
+  }
 });
 
 // ---------- 3. provider registry ----------

@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "A coding harness from scratch.",
   "main": "index.js",
+  "bin": {
+    "mypi": "bin/mypi.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx src/main.ts",

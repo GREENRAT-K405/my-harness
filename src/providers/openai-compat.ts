@@ -6,6 +6,7 @@
  */
 import OpenAI from "openai";
 import type { ContentBlock, Message, Provider, StopReason, Usage } from "../types.ts";
+import { parseToolArgs } from "./parse-args.ts";
 
 /**
  * Converts our conversation into OpenAI's format.
@@ -103,7 +104,7 @@ export function createOpenAICompat(name: string, baseURL: string, apiKey: string
       // build the final message: text first, then each tool call with its JSON parsed into an object
       const content: ContentBlock[] = text ? [{ type: "text", text }] : [];
       for (const c of calls) {
-        if (c) content.push({ type: "toolCall", id: c.id, name: c.name, arguments: c.args ? JSON.parse(c.args) : {} });
+        if (c) content.push({ type: "toolCall", id: c.id, name: c.name, arguments: parseToolArgs(c.args) });
       }
       // some servers say "stop" even when they called a tool, so trust the content
       if (content.some((b) => b.type === "toolCall")) stopReason = "toolUse";

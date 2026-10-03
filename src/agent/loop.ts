@@ -51,7 +51,7 @@ export async function runAgent(opts: AgentOptions): Promise<void> {
 
             try {
                 const tool=tools.find((t)=>t.name===call.name);
-                if(!tool) throw new Error(`unknown tool name ${tool}`)
+                if(!tool) throw new Error(`unknown tool name ${call.name}`)
                 result = await tool.execute(call.arguments)
             } catch (e) {
                 result=`Error ${e instanceof Error?e.message:String(e)}`
