@@ -1,9 +1,8 @@
-"""Provider for Groq, using the official `groq` SDK.
+"""Provider for OpenAI and any server that speaks the OpenAI Chat Completions API
+(OpenRouter, Ollama, llama.cpp, vLLM, LM Studio, ...), using the official `openai` SDK.
 
-Groq's API is modelled on OpenAI's Chat Completions, so this looks a lot like
-`openai_compat.py`. The differences are Groq-specific extras:
-- reasoning models stream their thinking in a separate `delta.reasoning` field,
-- token usage arrives in `x_groq.usage` on the last chunk (no `stream_options` needed).
+Translates our shared message format (see `../types.py`) into OpenAI's
+chat-completions format, streams the reply, and translates it back.
 """
 
 import json
@@ -11,8 +10,8 @@ import os
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, TypedDict
 
-import groq
-from groq.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
+import openai
+from openai.types.chat import ChatCompletionFunctionToolParam, ChatCompletionMessageParam
 
 from harness.types import (
     ContentBlock,
@@ -29,8 +28,8 @@ from harness.types import (
 MAX_TOKENS = 4096
 
 
-def _to_groq(messages: list[Message], system: str | None) -> list[ChatCompletionMessageParam]:
-    """Converts our conversation into Groq's (OpenAI-style) format.
+def _to_openai(messages: list[Message], system: str | None) -> list[ChatCompletionMessageParam]:
+    """Converts our conversation into OpenAI's format.
 
     Differences from our format:
     - The system prompt is just the first message, with role `"system"`.
@@ -47,7 +46,7 @@ def _to_groq(messages: list[Message], system: str | None) -> list[ChatCompletion
         if m["role"] == "user":
             out.append({"role": "user", "content": m["content"]})
         elif m["role"] == "assistant":
-            # no blocks: all text goes in `content`, all tool calls in `tool_calls`
+            # OpenAI has no blocks: all text goes in `content`, all tool calls in `tool_calls`
             text = "".join(b["text"] for b in m["content"] if b["type"] == "text")
             tool_calls = [
                 {
@@ -59,7 +58,7 @@ def _to_groq(messages: list[Message], system: str | None) -> list[ChatCompletion
                 if b["type"] == "tool_call"
             ]
             msg: dict[str, Any] = {"role": "assistant", "content": text or None}
-            if tool_calls:  # Groq rejects an empty tool_calls list
+            if tool_calls:  # some servers reject an empty tool_calls list
                 msg["tool_calls"] = tool_calls
             out.append(msg)  # type: ignore[arg-type]
         else:
@@ -69,7 +68,7 @@ def _to_groq(messages: list[Message], system: str | None) -> list[ChatCompletion
     return out
 
 
-def _to_groq_tools(tools: Sequence[ToolSpec]) -> list[ChatCompletionToolParam]:
+def _to_openai_tools(tools: Sequence[ToolSpec]) -> list[ChatCompletionFunctionToolParam]:
     # parameters are plain JSON Schema, same as ours
     return [
         {
@@ -88,22 +87,23 @@ class _PartialToolCall(TypedDict):
     arguments: str
 
 
-class _GroqProvider:
-    name = "groq"
-    default_model = "openai/gpt-oss-120b"
-
-    def __init__(self, client: groq.AsyncGroq) -> None:
+class _OpenAICompatProvider:
+    def __init__(self, client: openai.AsyncOpenAI, name: str, default_model: str) -> None:
         self.client = client
+        self.name = name
+        self.default_model = default_model
 
     async def stream(self, opts: StreamOptions) -> AsyncIterator[StreamEvent]:
         tools = opts.get("tools", [])
 
         stream = await self.client.chat.completions.create(
             model=opts["model"],
-            messages=_to_groq(opts["messages"], opts.get("system")),
-            tools=_to_groq_tools(tools) if tools else groq.omit,
+            messages=_to_openai(opts["messages"], opts.get("system")),
+            tools=_to_openai_tools(tools) if tools else openai.omit,
             max_completion_tokens=MAX_TOKENS,
             stream=True,
+            # without this, a streamed response has no token counts at all
+            stream_options={"include_usage": True},
         )
 
         content: list[ContentBlock] = []  # text blocks, built up as chunks arrive
@@ -112,10 +112,9 @@ class _GroqProvider:
         finish_reason: str | None = None
 
         async for chunk in stream:
-            # Groq puts usage in its own `x_groq` extension on the last chunk
-            u = chunk.usage or (chunk.x_groq.usage if chunk.x_groq else None)
-            if u:
-                usage = {"input": u.prompt_tokens, "output": u.completion_tokens}
+            # usage arrives in one extra chunk at the very end, which has no choices
+            if chunk.usage:
+                usage = {"input": chunk.usage.prompt_tokens, "output": chunk.usage.completion_tokens}
             if not chunk.choices:
                 continue
 
@@ -123,7 +122,6 @@ class _GroqProvider:
             finish_reason = choice.finish_reason or finish_reason
             delta = choice.delta
 
-            # delta.reasoning is the model's thinking (reasoning models only): not part of the answer
             if delta.content:
                 # glue new text onto the current text block, or start one
                 last = content[-1] if content else None
@@ -133,8 +131,8 @@ class _GroqProvider:
                     content.append({"type": "text", "text": delta.content})
                 yield {"type": "text_delta", "delta": delta.content}
 
-            # Groq usually sends a whole tool call in one chunk, but the format allows pieces
-            # (first piece: id + name, later pieces: argument fragments), so handle both.
+            # Unlike Gemini, a tool call arrives in pieces: the first piece has the id and name,
+            # later pieces add fragments of the arguments JSON. `index` says which call a piece is for.
             for tc in delta.tool_calls or []:
                 call = partial_calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
                 if tc.id:
@@ -170,10 +168,23 @@ def _finish_tool_call(call: _PartialToolCall) -> ToolCallBlock:
     return {"type": "tool_call", "id": call["id"], "name": call["name"], "arguments": arguments}
 
 
-def create_groq() -> Provider:
-    """Creates the Groq provider. Reads the API key from `GROQ_API_KEY`.
+def create_openai_compat(
+    *,
+    name: str = "openai",
+    base_url: str | None = None,
+    api_key_env: str = "OPENAI_API_KEY",
+    default_model: str = "FILL_ME_IN",
+) -> Provider:
+    """Creates a provider for any OpenAI-compatible API.
+
+    With no arguments it talks to OpenAI itself. Point `base_url` somewhere else to use
+    another server, e.g. a local Ollama:
+
+        create_openai_compat(name="ollama", base_url="http://localhost:11434/v1",
+                             api_key_env="OLLAMA_API_KEY", default_model="qwen3")
 
     `stream()` yields a `text_delta` event for each piece of visible text as it
     arrives, then one `done` event with the complete assistant message.
     """
-    return _GroqProvider(groq.AsyncGroq(api_key=os.environ["GROQ_API_KEY"]))
+    client = openai.AsyncOpenAI(api_key=os.environ[api_key_env], base_url=base_url)
+    return _OpenAICompatProvider(client, name, default_model)
